@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useRef } from "react"
 
+type InsightButton = {
+  label: string
+  insight: string
+  data: Record<string, string>
+}
+
 type WorkflowFormData = {
   documentType: string
   borrowerName: string
@@ -42,6 +48,8 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
   const [step, setStep] = useState(initialStep)
   const [formData, setFormData] = useState<WorkflowFormData>(initialData)
   const [nudges, setNudges] = useState<string[]>([])
+  const [buttons, setButtons] = useState<InsightButton[]>([])
+  const [expandedButton, setExpandedButton] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [completed, setCompleted] = useState(false)
 
@@ -70,8 +78,11 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
       })
       const json = await res.json()
       const incoming: string[] = json.nudges ?? []
+      const incomingButtons: InsightButton[] = json.buttons ?? []
       setNudges(incoming)
-      if (incoming.length > 0) {
+      setButtons(incomingButtons)
+      setExpandedButton(null)
+      if (incoming.length > 0 || incomingButtons.length > 0) {
         fireEvent({ eventType: "sidecar_shown", step: currentStep })
       }
     } catch {}
@@ -269,7 +280,7 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
               Contextual Guidance
             </h3>
-            {nudges.length === 0 ? (
+            {nudges.length === 0 && buttons.length === 0 ? (
               <p className="text-sm text-gray-300 italic">No alerts for current inputs.</p>
             ) : (
               <div className="space-y-3">
@@ -279,6 +290,34 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
                     className="text-sm text-gray-700 bg-amber-50 border border-amber-100 rounded-lg p-3 leading-relaxed"
                   >
                     {nudge}
+                  </div>
+                ))}
+                {buttons.map((btn, i) => (
+                  <div key={i}>
+                    <button
+                      onClick={() => {
+                        const next = expandedButton === i ? null : i
+                        setExpandedButton(next)
+                        if (next !== null) {
+                          fireEvent({ eventType: "insight_button_click", step, metadata: { buttonLabel: btn.label } })
+                        }
+                      }}
+                      className="w-full text-left text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5 hover:bg-blue-100 transition-colors flex items-center justify-between gap-2"
+                    >
+                      <span>{btn.label}</span>
+                      <span className="flex-shrink-0 text-blue-400">{expandedButton === i ? "▲" : "▼"}</span>
+                    </button>
+                    {expandedButton === i && (
+                      <div className="mt-1 bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-2">
+                        <p className="text-xs font-medium text-gray-500">{btn.insight}</p>
+                        {Object.entries(btn.data).map(([key, value]) => (
+                          <div key={key} className="flex justify-between gap-2 text-xs">
+                            <span className="text-gray-400 shrink-0">{key}</span>
+                            <span className="font-medium text-gray-700 text-right">{value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

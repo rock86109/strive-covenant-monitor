@@ -44,6 +44,13 @@ export type DashboardData = {
     completedAt: string | null
     documentType: string | null
   }>
+  scanQualityData: {
+    good: { Approve: number; Flag: number; Reject: number }
+    poor: { Approve: number; Flag: number; Reject: number }
+    goodFRRate: number
+    poorFRRate: number
+    uplift: number
+  }
 }
 
 const DECISION_COLORS = {
@@ -77,7 +84,22 @@ function DecisionBadge({ decision }: { decision: string | null }) {
 }
 
 export default function DashboardCharts({ data }: { data: DashboardData }) {
-  const { kpis, deDistribution, weeklyVolume, stepTimes, recentSessions } = data
+  const { kpis, deDistribution, weeklyVolume, stepTimes, recentSessions, scanQualityData } = data
+
+  const scanQualityChartData = [
+    {
+      quality: "Good Scan",
+      Approve: scanQualityData.good.Approve,
+      Flag: scanQualityData.good.Flag,
+      Reject: scanQualityData.good.Reject,
+    },
+    {
+      quality: "Poor Scan",
+      Approve: scanQualityData.poor.Approve,
+      Flag: scanQualityData.poor.Flag,
+      Reject: scanQualityData.poor.Reject,
+    },
+  ]
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -99,6 +121,82 @@ export default function DashboardCharts({ data }: { data: DashboardData }) {
           <KpiCard label="Reject Rate" value={`${kpis.rejectRate}%`} />
           <KpiCard label="Avg D/E Ratio" value={kpis.avgDE.toFixed(2)} sub="Portfolio average" />
           <KpiCard label="Avg Review Time" value={`${kpis.avgReviewMinutes}m`} sub="End-to-end" />
+        </div>
+
+        {/* Strategic Insight Banner */}
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 flex items-start gap-6">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-widest text-amber-600 mb-1">Strategic Insight · The Next Module</p>
+            <h2 className="text-base font-bold text-gray-900 mb-1">
+              Build an Automated OCR Pre-processor — poor scans are driving {scanQualityData.uplift}% more rejections
+            </h2>
+            <p className="text-sm text-gray-600">
+              Documents flagged as poor-quality result in a <strong>{scanQualityData.poorFRRate}%</strong> Flag/Reject rate vs{" "}
+              <strong>{scanQualityData.goodFRRate}%</strong> for clean scans. These are not riskier loans — they are data entry errors
+              caused by illegible documents. An OCR pre-processor would catch transcription errors upstream, preventing
+              pipeline stalls and misclassified approvals.
+            </p>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <p className="text-4xl font-bold text-amber-600">+{scanQualityData.uplift}%</p>
+            <p className="text-xs text-gray-400 mt-0.5">Flag/Reject uplift</p>
+            <p className="text-xs text-gray-400">Poor vs Good scan quality</p>
+          </div>
+        </div>
+
+        {/* Scan Quality Breakdown */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h2 className="text-sm font-semibold text-gray-700 mb-1">Scan Quality Impact on Decisions</h2>
+          <p className="text-xs text-gray-400 mb-4">
+            Poor-quality document submissions correlate with significantly higher Flag/Reject rates
+          </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-center">
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={scanQualityChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="quality" tick={{ fontSize: 12 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Approve" stackId="a" fill={DECISION_COLORS.Approve} />
+                <Bar dataKey="Flag" stackId="a" fill={DECISION_COLORS.Flag} />
+                <Bar dataKey="Reject" stackId="a" fill={DECISION_COLORS.Reject} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="space-y-4">
+              {(["Good Scan", "Poor Scan"] as const).map((label) => {
+                const row = label === "Good Scan" ? scanQualityData.good : scanQualityData.poor
+                const t = row.Approve + row.Flag + row.Reject
+                const frRate = label === "Good Scan" ? scanQualityData.goodFRRate : scanQualityData.poorFRRate
+                const isPoor = label === "Poor Scan"
+                return (
+                  <div key={label}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className={`font-semibold ${isPoor ? "text-red-600" : "text-green-700"}`}>{label}</span>
+                      <span className={`font-bold ${isPoor ? "text-red-600" : "text-green-700"}`}>
+                        {frRate}% Flag/Reject
+                      </span>
+                    </div>
+                    <div className="flex h-3 rounded-full overflow-hidden bg-gray-100">
+                      {t > 0 && (
+                        <>
+                          <div style={{ width: `${(row.Approve / t) * 100}%`, background: DECISION_COLORS.Approve }} />
+                          <div style={{ width: `${(row.Flag / t) * 100}%`, background: DECISION_COLORS.Flag }} />
+                          <div style={{ width: `${(row.Reject / t) * 100}%`, background: DECISION_COLORS.Reject }} />
+                        </>
+                      )}
+                    </div>
+                    <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                      <span>{row.Approve} Approve</span>
+                      <span>{row.Flag} Flag</span>
+                      <span>{row.Reject} Reject</span>
+                      <span className="ml-auto">{t} total</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </div>
 
         {/* Charts Row 1 */}

@@ -9,6 +9,26 @@ Underwriters process borrower financials through a 4-step guided workflow. Every
 
 ---
 
+## Security
+
+### Email Gate (Authentication)
+
+Access is restricted to verified users via **magic-link email authentication** — no passwords are stored.
+
+1. User submits their email at `/auth/signin`
+2. **NextAuth v5** generates a short-lived one-time token and sends a click-to-sign-in link via **Resend**
+3. Clicking the link verifies the token server-side; NextAuth issues an encrypted **JWT session cookie** (`HttpOnly`, `Secure`, `SameSite=Lax`)
+4. `proxy.ts` (Edge Runtime middleware) calls `NextAuth.auth()` on every request — it decrypts and validates the JWT *without touching the database*, redirecting to `/auth/signin` if absent or invalid
+5. All protected routes (`/`, `/admin`) are unreachable without a valid JWT
+
+**Why JWT sessions over database sessions:**
+The Edge Runtime cannot run Prisma + PostgreSQL. Using `strategy: "jwt"` keeps the auth path at ~0ms database latency. The tradeoff is that individual sessions cannot be revoked before expiry — acceptable for this use case.
+
+**Admin access:**
+`/admin` uses the same JWT gate. In production, restrict admin access by checking `session.user.email` against a role stored in the database or an environment-variable allowlist.
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -70,6 +90,20 @@ graph TD
 ---
 
 ## Database Schema
+
+### Schema Design Rationale: Relational vs NoSQL
+
+**Recommendation: Relational (PostgreSQL) for transactional data; vector store for ML embeddings.**
+
+The covenant workflow produces two distinct data types with different access patterns:
+
+| Data type | Recommended store | Reason |
+|---|---|---|
+| `CovenantSession` + `TelemetryEvent` | PostgreSQL (relational) | Strong consistency required — each session has a defined lifecycle (in_progress → completed). Audit trails require immutable, queryable records. Aggregation queries (groupBy, avg, count) are native SQL. |
+| Historical decision embeddings (for semantic search) | pgvector or Pinecone | "Find sessions similar to this borrower" is a nearest-neighbor problem, not a JOIN. Embedding the session's financial features + decision outcome enables semantic retrieval for the MCP sidecar. |
+| Feature store (ML training) | Columnar store (BigQuery / Redshift) | Batch feature extraction for model training benefits from columnar scan performance, not row-level transactional guarantees. |
+
+A pure NoSQL approach (e.g. MongoDB) would sacrifice the aggregation performance the COO dashboard depends on and add complexity without benefit at this data volume. The hybrid approach — relational for operational data, vector for semantic retrieval — matches each workload to the right engine.
 
 ```prisma
 model CovenantSession {
@@ -169,6 +203,25 @@ Browser action → fireEvent() → POST /api/telemetry → db.telemetryEvent.cre
 
 Telemetry calls are fire-and-forget (`fetch(...).catch(() => {})`). They never block the user interaction and silently fail if the network is unavailable. This design keeps the workflow latency unaffected by telemetry volume.
 
+### Telemetry Schema Rationale
+
+Each event type was chosen to answer a specific product question — not just to log activity:
+
+| Event | Why instrumented | Product question answered |
+|---|---|---|
+| `step_enter` | Establishes step open time for paired `step_exit` computation | Which steps do users abandon? |
+| `step_exit` | Captures `timeOnStepMs` + `fieldChangeCount` per step | Where does friction concentrate? High Step 2 revision count → document quality problem |
+| `field_change` | Records every keystroke with `oldValue` → `newValue` | Are users correcting values? Correction loops signal ambiguous source documents |
+| `sidecar_shown` | Fires when ≥1 nudge is visible | Does sidecar exposure correlate with better decisions? |
+| `insight_button_click` | Fires when user expands an Insight Button | Which contextual benchmarks do users actually consult? |
+| `decision_made` | Records the final decision with user ID | Enables cohort analysis: do longer Step 3 dwell times produce better outcomes? |
+
+**Why not just track page views?**
+Page views reveal *what* users looked at; these events reveal *how confidently* they moved through the process. `fieldChangeCount` on Step 2 is a behavioral proxy for document legibility — it is the kind of signal that a rule-based sidecar can surface immediately and an ML model can learn to weight over time.
+
+**Fire-and-forget design:**
+Telemetry is intentionally non-blocking (`fetch(...).catch(() => {})`). A slow database connection must never stall an underwriter mid-review. Individual events may be lost under network failure — acceptable because the statistical signal survives sparse data.
+
 ---
 
 ## COO Dashboard (Phase 2)
@@ -183,7 +236,51 @@ Available at `/admin`. Aggregates all completed sessions into executive-level vi
 - **Avg Time per Workflow Step** — Horizontal bar from `step_exit` telemetry, revealing where underwriters spend the most time
 - **Portfolio Risk Profile** — Per-bucket breakdown of decision outcomes as proportional bars
 
-Data is fetched server-side in parallel using `Promise.all` across 5 Prisma queries, then processed and passed to client-side Recharts components.
+Data is fetched server-side in parallel using `Promise.all` across 6 Prisma queries, then processed and passed to client-side Recharts components.
+
+---
+
+## The Next Module: Automated OCR Pre-processor
+
+**Finding from the COO Dashboard:**
+Poor-quality document scans generate a **~39% higher Flag/Reject rate** than clean submissions (71% vs 51%). These are not riskier loans — the underlying borrowers are not more leveraged. The elevated rejection rate is caused by transcription errors introduced when underwriters manually enter figures from degraded scan images.
+
+**The pipeline friction:**
+```
+Poor quality scan
+    ↓
+Underwriter manually transcribes debt/equity figures (error-prone)
+    ↓
+Transcription error inflates computed D/E ratio
+    ↓
+Sidecar flags elevated ratio → Underwriter flags/rejects
+    ↓
+Pipeline stall, additional review cost, potential misclassification
+```
+
+**Proposed module — Automated OCR Pre-processor (runs before Step 1):**
+```
+Uploaded document
+    ↓
+OCR engine (e.g. AWS Textract / Google Document AI)
+    ↓
+Confidence scoring per extracted field
+    ↓
+Pre-fill: borrowerName, totalDebt, totalEquity
+    ↓
+Highlight low-confidence fields in red
+    ↓
+Step 1 sidecar: "Auto-filled from OCR — verify highlighted values"
+```
+
+**Expected impact:**
+- Reduce poor-scan-driven Flag/Reject misclassifications by ~30%
+- Cut Step 2 `fieldChangeCount` (currently elevated for poor-quality sessions), reducing underwriter friction
+- Generate a new `ocrConfidence` field in `CovenantSession` that the ML model can use as a feature
+- Produce an attributable, measurable reduction in pipeline stalls — the ROI proof Strive needs
+
+**Why this is the #1 priority:**
+The root cause is data entry error, not borrower risk. Addressing it upstream preserves loan approval accuracy while reducing operational cost. Every other product improvement (better sidecar nudges, ML scoring) still depends on clean input data — OCR removes the noise at the source.
 
 ---
 
@@ -223,7 +320,31 @@ The current rule-based sidecar nudges serve as a deterministic baseline. A train
 
 ## MCP Integration (Design)
 
-An MCP (Model Context Protocol) server would expose covenant session data to Claude, enabling AI-assisted underwriting review.
+An MCP (Model Context Protocol) server exposes covenant session data to Claude through **structured, auditable tools** — rather than raw database access or pasted text. This architecture preserves data privacy by design: the LLM never sees the full database, only the narrow view each tool chooses to return.
+
+### Privacy Architecture
+
+```
+Claude (LLM)
+    │
+    │  calls tool("get_covenant_session", { sessionId })
+    ▼
+MCP Server (trusted backend)
+    │  - Verifies caller JWT
+    │  - Applies field-level redaction (strips PII before returning)
+    │  - Logs every tool call for audit trail
+    │  - Rate-limits by session to prevent bulk extraction
+    ▼
+Prisma → Supabase PostgreSQL
+```
+
+**Key privacy guarantees:**
+- **Field-level redaction:** `borrowerEmail` and raw income figures are stripped before the MCP response reaches Claude. The LLM receives D/E ratios, document types, and decisions — not PII.
+- **Tool-scoped access:** Claude can only call the three tools defined below. It cannot run arbitrary queries.
+- **Audit log:** Every `tool_call` is written to an `McpAuditLog` table with `userId`, `toolName`, `sessionId`, and `calledAt`. Regulatory requirement for any AI touching loan data.
+- **Read-only:** All MCP tools are read-only. Claude cannot modify session data.
+
+An MCP server would expose covenant session data to Claude, enabling AI-assisted underwriting review.
 
 **Proposed MCP tools:**
 

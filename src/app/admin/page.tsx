@@ -15,7 +15,7 @@ export default async function AdminPage() {
   const session = await auth()
   if (!session?.user?.id) redirect("/auth/signin")
 
-  const [decisionGroups, deStats, allSessions, stepTimeGroups, recentRaw] = await Promise.all([
+  const [decisionGroups, deStats, allSessions, stepTimeGroups, recentRaw, scanQualityGroups] = await Promise.all([
     // Decision counts
     db.covenantSession.groupBy({
       by: ["decision"],
@@ -56,6 +56,13 @@ export default async function AdminPage() {
         completedAt: true,
         documentType: true,
       },
+    }),
+
+    // Scan quality vs decision breakdown
+    db.covenantSession.groupBy({
+      by: ["scanQuality", "decision"],
+      where: { status: "completed", scanQuality: { not: null }, decision: { not: null } },
+      _count: { id: true },
     }),
   ])
 
@@ -129,6 +136,25 @@ export default async function AdminPage() {
       avgMinutes: Math.round(((g._avg.timeOnStepMs ?? 0) / 60000) * 10) / 10,
     }))
 
+  // Scan quality correlation
+  type QualityDecisions = { Approve: number; Flag: number; Reject: number }
+  const qualityMap: Record<string, QualityDecisions> = {
+    Good: { Approve: 0, Flag: 0, Reject: 0 },
+    Poor: { Approve: 0, Flag: 0, Reject: 0 },
+  }
+  for (const g of scanQualityGroups) {
+    const q = g.scanQuality
+    const d = g.decision
+    if ((q === "Good" || q === "Poor") && (d === "Approve" || d === "Flag" || d === "Reject")) {
+      qualityMap[q][d] += g._count.id
+    }
+  }
+  const goodTotal = qualityMap.Good.Approve + qualityMap.Good.Flag + qualityMap.Good.Reject
+  const poorTotal = qualityMap.Poor.Approve + qualityMap.Poor.Flag + qualityMap.Poor.Reject
+  const goodFRRate = goodTotal > 0 ? Math.round(((qualityMap.Good.Flag + qualityMap.Good.Reject) / goodTotal) * 100) : 0
+  const poorFRRate = poorTotal > 0 ? Math.round(((qualityMap.Poor.Flag + qualityMap.Poor.Reject) / poorTotal) * 100) : 0
+  const scanUplift = goodFRRate > 0 ? Math.round(((poorFRRate - goodFRRate) / goodFRRate) * 100) : 0
+
   const dashboardData: DashboardData = {
     kpis: {
       total,
@@ -145,6 +171,13 @@ export default async function AdminPage() {
       ...s,
       completedAt: s.completedAt?.toISOString() ?? null,
     })),
+    scanQualityData: {
+      good: qualityMap.Good,
+      poor: qualityMap.Poor,
+      goodFRRate,
+      poorFRRate,
+      uplift: scanUplift,
+    },
   }
 
   return <DashboardCharts data={dashboardData} />

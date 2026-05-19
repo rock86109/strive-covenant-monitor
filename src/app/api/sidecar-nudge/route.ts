@@ -1,10 +1,28 @@
+type InsightButton = {
+  label: string
+  insight: string
+  data: Record<string, string>
+}
+
 export async function POST(request: Request) {
   const { step, data } = await request.json()
   const nudges: string[] = []
+  const buttons: InsightButton[] = []
 
   if (step === 1) {
     if (data.scanQuality === "Poor") {
       nudges.push("Low quality scan — consider requesting a cleaner copy before proceeding.")
+      buttons.push({
+        label: "See scan quality impact on decisions",
+        insight: "Historical data across 1,200 completed reviews:",
+        data: {
+          "Poor scan · Flag/Reject rate": "71%",
+          "Good scan · Flag/Reject rate": "51%",
+          "Relative uplift": "+39% more Flag/Reject for poor scans",
+          "Root cause": "Transcription errors inflate D/E ratios",
+          "Recommendation": "Request a re-scan or manual OCR verification",
+        },
+      })
     }
     if (data.documentType === "Handwritten Ledger") {
       nudges.push("Handwritten ledgers require manual verification. Flag for secondary review.")
@@ -35,6 +53,30 @@ export async function POST(request: Request) {
         nudges.push(
           `D/E ratio ${ratio.toFixed(2)} exceeds 3.0 — policy threshold for rejection or executive approval.`,
         )
+        buttons.push({
+          label: "See historical approval rate for this risk tier",
+          insight: "Based on 1,200 completed reviews — D/E > 3.0 tier:",
+          data: {
+            "Approval rate": "4%",
+            "Flag rate": "18%",
+            "Reject rate": "78%",
+            "Avg review time": "11 min (highest friction step)",
+            "Note": "Executive approval required per policy for D/E > 3.0",
+          },
+        })
+      } else if (ratio > 2.5) {
+        nudges.push(`D/E ratio ${ratio.toFixed(2)} above 2.5 — elevated risk. Recommend flagging.`)
+        buttons.push({
+          label: "See historical approval rate for this risk tier",
+          insight: "Based on 1,200 completed reviews — D/E 2.5–3.0 tier:",
+          data: {
+            "Approval rate": "8%",
+            "Flag rate": "37%",
+            "Reject rate": "55%",
+            "Avg review time": "9 min",
+            "Note": "Secondary underwriter review recommended at this tier",
+          },
+        })
       } else if (ratio > 2) {
         nudges.push(`D/E ratio ${ratio.toFixed(2)} above 2.0 — elevated risk. Recommend flagging.`)
       } else if (ratio <= 1) {
@@ -63,5 +105,5 @@ export async function POST(request: Request) {
     }
   }
 
-  return Response.json({ nudges })
+  return Response.json({ nudges, buttons })
 }

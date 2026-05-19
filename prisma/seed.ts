@@ -28,29 +28,22 @@ function logNormal(mean: number, sigma: number): number {
   return Math.exp(mean + sigma * z)
 }
 
-function decisionForRatio(ratio: number): string {
+function decisionForRatio(ratio: number, scanQuality: string): string {
   const r = Math.random()
-  if (ratio <= 1.5) {
-    // Healthy
-    if (r < 0.82) return "Approve"
-    if (r < 0.94) return "Flag"
-    return "Reject"
-  } else if (ratio <= 2.5) {
-    // Elevated
-    if (r < 0.28) return "Approve"
-    if (r < 0.75) return "Flag"
-    return "Reject"
-  } else if (ratio <= 3) {
-    // High
-    if (r < 0.08) return "Approve"
-    if (r < 0.45) return "Flag"
-    return "Reject"
-  } else {
-    // Very high
-    if (r < 0.04) return "Approve"
-    if (r < 0.22) return "Flag"
-    return "Reject"
+  // Base approve/flag thresholds by D/E tier
+  let [a, f] =
+    ratio <= 1.5 ? [0.82, 0.94] :
+    ratio <= 2.5 ? [0.28, 0.75] :
+    ratio <= 3.0 ? [0.08, 0.45] :
+                   [0.04, 0.22]
+
+  // Poor scan quality causes transcription errors → ~40% more Flag/Reject outcomes
+  if (scanQuality === "Poor") {
+    a = Math.max(0, a - 0.08)
+    f = Math.max(a, f - 0.04)
   }
+
+  return r < a ? "Approve" : r < f ? "Flag" : "Reject"
 }
 
 const APPROVE_NOTES = [
@@ -125,7 +118,7 @@ async function main() {
     const debtToEquityRatio = Math.round((totalDebt / totalEquity) * 100) / 100
     const income = Math.round(rand(50000, 1200000) * 100) / 100
 
-    const decision = decisionForRatio(debtToEquityRatio)
+    const decision = decisionForRatio(debtToEquityRatio, scanQuality)
     const decisionNotes = notesForDecision(decision)
 
     const createdAt = new Date(sixMonthsAgo + Math.random() * (now - sixMonthsAgo))
