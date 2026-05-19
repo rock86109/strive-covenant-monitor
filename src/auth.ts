@@ -10,7 +10,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY,
-      from: "Covenant Monitor <onboarding@resend.dev>",
+      from: "Covenant Monitor <noreply@dannyjiang.net>",
     }),
   ],
   session: {
