@@ -7,10 +7,6 @@ const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! })
 const db = new PrismaClient({ adapter })
 
 const DOCUMENT_TYPES = ["Tax Return", "Financial Statement", "Bank Statement", "Handwritten Ledger"]
-const SCAN_QUALITIES = ["Good", "Poor"]
-const FIRST_NAMES = ["James", "Maria", "Robert", "Linda", "Michael", "Barbara", "David", "Susan", "Richard", "Jessica", "Thomas", "Sarah", "Charles", "Karen", "Daniel", "Nancy", "Matthew", "Lisa", "Anthony", "Betty", "Mark", "Margaret", "Donald", "Sandra", "Steven", "Ashley", "Paul", "Dorothy", "Andrew", "Kimberly"]
-const LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Wilson", "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin", "Thompson", "Moore", "Allen", "Young", "King", "Scott", "Green", "Baker", "Adams", "Nelson", "Hill", "Ramirez", "Campbell", "Mitchell"]
-const DOMAINS = ["capital.com", "ventures.io", "holdings.net", "partners.co", "group.com", "associates.org"]
 
 function rand(min: number, max: number) {
   return Math.random() * (max - min) + min
@@ -102,10 +98,9 @@ async function main() {
   const sixMonthsAgo = now - 180 * 24 * 60 * 60 * 1000
 
   for (let i = 0; i < toCreate; i++) {
-    const firstName = pick(FIRST_NAMES)
-    const lastName = pick(LAST_NAMES)
-    const borrowerName = `${firstName} ${lastName}`
-    const borrowerEmail = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${pick(DOMAINS)}`
+    const letter = String.fromCharCode(65 + (i % 26))
+    const borrowerName = letter
+    const borrowerEmail = `${letter.toLowerCase()}@gmail.com`
 
     const docType = Math.random() < 0.4 ? "Tax Return" : Math.random() < 0.6 ? "Financial Statement" : Math.random() < 0.75 ? "Bank Statement" : "Handwritten Ledger"
     const scanQuality = Math.random() < 0.8 ? "Good" : "Poor"
