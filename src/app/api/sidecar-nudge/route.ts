@@ -11,7 +11,13 @@ export async function POST(request: Request) {
   const nudges: string[] = []
   const buttons: InsightButton[] = []
 
-  // Borrower history — shown on all steps whenever email is known
+  const isHandwritten = data.documentType === "Handwritten Ledger"
+  const isPoorScan = data.scanQuality === "Poor"
+  const debt = parseFloat(data.totalDebt)
+  const equity = parseFloat(data.totalEquity)
+  const ratio = typeof data.debtToEquityRatio === "number" ? data.debtToEquityRatio : null
+
+  // ── Borrower history ────────────────────────────────────────────────────────
   if (data.borrowerEmail) {
     const history = await db.covenantSession.findMany({
       where: { borrowerEmail: data.borrowerEmail, status: "completed", decision: { not: null } },
@@ -42,16 +48,31 @@ export async function POST(request: Request) {
         },
       })
 
-      if (counts.Reject > 0 || counts.Flag > counts.Approve) {
-        nudges.push(`Prior history shows elevated risk — ${counts.Flag} Flag and ${counts.Reject} Reject across ${history.length} sessions.`)
+      if (counts.Reject >= 2 || (counts.Flag + counts.Reject > counts.Approve && history.length >= 3)) {
+        nudges.push(`⚠️ Repeat borrower with poor track record — ${counts.Reject} prior rejections and ${counts.Flag} flags across ${history.length} sessions.`)
       }
     }
   }
 
-  // Step-specific nudges
+  // ── Step 1: Document ingestion ───────────────────────────────────────────────
   if (step === 1) {
-    if (data.scanQuality === "Poor") {
-      nudges.push("Low quality scan — consider requesting a cleaner copy before proceeding.")
+    if (isHandwritten && isPoorScan) {
+      nudges.push("⚠️ Handwritten ledger with poor scan quality — historical reject rate reaches 65% for this combination. Request electronic records before proceeding.")
+      buttons.push({
+        label: "View document request template",
+        insight: "Standard template for requesting supplementary electronic records:",
+        data: {
+          "Subject": "Request for Electronic Financial Records",
+          "Required documents": "Digital P&L, bank statements (6 months), tax returns (2 years)",
+          "Acceptable formats": "PDF export from accounting software (QuickBooks, Xero, etc.)",
+          "Deadline": "5 business days from receipt of this notice",
+          "Note": "Manual OCR re-entry from poor scans has a ~30% transcription error rate",
+        },
+      })
+    } else if (isHandwritten) {
+      nudges.push("Handwritten ledger detected — flag for secondary verification. Manual ledgers have a 2× higher data entry error rate than digital documents.")
+    } else if (isPoorScan) {
+      nudges.push("Poor scan quality — transcription errors can inflate D/E ratios by 15–30%. Request a re-scan if financial figures are ambiguous.")
       buttons.push({
         label: "See scan quality impact on decisions",
         insight: "Historical data across 1,200 completed reviews:",
@@ -64,79 +85,124 @@ export async function POST(request: Request) {
         },
       })
     }
-    if (data.documentType === "Handwritten Ledger") {
-      nudges.push("Handwritten ledgers require manual verification. Flag for secondary review.")
+
+    if (data.documentType === "2022 Schedule K-1") {
+      nudges.push("Schedule K-1 reflects partnership income only — request accompanying Form 1065 for full entity-level financials.")
     }
   }
 
+  // ── Step 2: Financial entry ──────────────────────────────────────────────────
   if (step === 2) {
-    const debt = parseFloat(data.totalDebt)
-    const equity = parseFloat(data.totalEquity)
-    if (!isNaN(equity) && equity > 0 && equity < 100_000) {
-      nudges.push("Very low equity position (<$100K). Consider escalating to senior underwriter.")
+    const hasDebt = !isNaN(debt) && debt > 0
+    const hasEquity = !isNaN(equity) && equity > 0
+
+    if (hasEquity && equity < 100_000) {
+      nudges.push("⚠️ Equity below $100K — 89% of similar cases result in Reject. Escalate to senior underwriter.")
     }
-    if (!isNaN(debt) && debt > 5_000_000) {
-      nudges.push("Large debt exposure (>$5M). Verify against current credit limits.")
+
+    if (hasDebt && debt > 10_000_000) {
+      nudges.push("⚠️ Debt exceeds $10M — mandatory escalation to credit committee per policy. Do not approve without committee sign-off.")
+    } else if (hasDebt && debt > 5_000_000) {
+      nudges.push("Large debt exposure (>$5M). Verify against current credit limits before proceeding.")
     }
-    if (!isNaN(debt) && !isNaN(equity) && equity > 0) {
+
+    if (hasDebt && hasEquity) {
       const r = debt / equity
-      if (r > 2) {
-        nudges.push(`Preliminary D/E ratio: ${r.toFixed(2)} — elevated. Prepare to flag.`)
+      if (r > 5) {
+        nudges.push(`⚠️ Preliminary D/E of ${r.toFixed(1)} — exceeds 5.0. Executive committee approval required; standard underwriter sign-off insufficient.`)
+      } else if (r > 3) {
+        nudges.push(`Preliminary D/E of ${r.toFixed(1)} — above policy threshold of 3.0. Prepare rejection rationale or obtain executive approval.`)
+      } else if (r > 2) {
+        nudges.push(`Preliminary D/E of ${r.toFixed(1)} — elevated. Likely to be flagged for review.`)
+      }
+
+      if (isHandwritten && r > 2) {
+        nudges.push("Elevated D/E from handwritten source — verify figures against original documents before finalizing. Entry errors are common at this step.")
       }
     }
   }
 
-  if (step === 3) {
-    const ratio = data.debtToEquityRatio
-    if (typeof ratio === "number") {
-      if (ratio > 3) {
-        nudges.push(`D/E ratio ${ratio.toFixed(2)} exceeds 3.0 — policy threshold for rejection or executive approval.`)
-        buttons.push({
-          label: "See historical approval rate for this risk tier",
-          insight: "Based on 1,200 completed reviews — D/E > 3.0 tier:",
-          data: {
-            "Approval rate": "4%",
-            "Flag rate": "18%",
-            "Reject rate": "78%",
-            "Avg review time": "11 min (highest friction step)",
-            "Note": "Executive approval required per policy for D/E > 3.0",
-          },
-        })
-      } else if (ratio > 2.5) {
-        nudges.push(`D/E ratio ${ratio.toFixed(2)} above 2.5 — elevated risk. Recommend flagging.`)
-        buttons.push({
-          label: "See historical approval rate for this risk tier",
-          insight: "Based on 1,200 completed reviews — D/E 2.5–3.0 tier:",
-          data: {
-            "Approval rate": "8%",
-            "Flag rate": "37%",
-            "Reject rate": "55%",
-            "Avg review time": "9 min",
-            "Note": "Secondary underwriter review recommended at this tier",
-          },
-        })
-      } else if (ratio > 2) {
-        nudges.push(`D/E ratio ${ratio.toFixed(2)} above 2.0 — elevated risk. Recommend flagging.`)
-      } else if (ratio <= 1) {
-        nudges.push(`Strong D/E ratio of ${ratio.toFixed(2)}. Borrower shows healthy equity position.`)
-      } else {
-        nudges.push(`D/E ratio ${ratio.toFixed(2)} — within acceptable range.`)
-      }
+  // ── Step 3: Ratio analysis ───────────────────────────────────────────────────
+  if (step === 3 && ratio !== null) {
+    if (ratio > 3 && isPoorScan) {
+      nudges.push(`⚠️ D/E ratio ${ratio.toFixed(2)} with poor scan quality — ratio may be overstated due to transcription errors. Re-scan recommended before issuing a rejection.`)
+    } else if (ratio > 3 && isHandwritten) {
+      nudges.push(`⚠️ D/E ratio ${ratio.toFixed(2)} sourced from handwritten ledger — confirm all figures are correctly transcribed. A 10% input error at this D/E level changes the outcome.`)
+      buttons.push({
+        label: "See historical approval rate for this risk tier",
+        insight: "Based on 1,200 completed reviews — D/E > 3.0 tier:",
+        data: {
+          "Approval rate": "4%",
+          "Flag rate": "18%",
+          "Reject rate": "78%",
+          "Avg review time": "11 min (highest friction)",
+          "Note": "Executive approval required per policy for D/E > 3.0",
+        },
+      })
+    } else if (ratio > 3) {
+      nudges.push(`D/E ratio ${ratio.toFixed(2)} exceeds 3.0 — policy threshold for rejection or executive approval.`)
+      buttons.push({
+        label: "See historical approval rate for this risk tier",
+        insight: "Based on 1,200 completed reviews — D/E > 3.0 tier:",
+        data: {
+          "Approval rate": "4%",
+          "Flag rate": "18%",
+          "Reject rate": "78%",
+          "Avg review time": "11 min (highest friction)",
+          "Note": "Executive approval required per policy for D/E > 3.0",
+        },
+      })
+    } else if (ratio > 2.5) {
+      nudges.push(`D/E ratio ${ratio.toFixed(2)} above 2.5 — elevated risk. Recommend flagging for review.`)
+      buttons.push({
+        label: "See historical approval rate for this risk tier",
+        insight: "Based on 1,200 completed reviews — D/E 2.5–3.0 tier:",
+        data: {
+          "Approval rate": "8%",
+          "Flag rate": "37%",
+          "Reject rate": "55%",
+          "Avg review time": "9 min",
+          "Note": "Secondary underwriter review recommended at this tier",
+        },
+      })
+    } else if (ratio > 2) {
+      nudges.push(`D/E ratio ${ratio.toFixed(2)} above 2.0 — elevated. Flag for review unless mitigating factors apply.`)
+    } else if (ratio <= 1) {
+      nudges.push(`Strong D/E ratio of ${ratio.toFixed(2)} — borrower shows healthy equity position. Standard approval path.`)
+    } else {
+      nudges.push(`D/E ratio ${ratio.toFixed(2)} — within acceptable range.`)
     }
   }
 
+  // ── Step 4: Decision ─────────────────────────────────────────────────────────
   if (step === 4) {
-    const ratio = data.debtToEquityRatio
-    if (typeof ratio === "number") {
+    if (ratio !== null) {
       if (ratio > 3) {
-        nudges.push("System recommendation: Reject. D/E ratio exceeds policy threshold of 3.0.")
+        if (data.decision === "Approve") {
+          nudges.push("⚠️ Approving a D/E ratio above 3.0 — senior underwriter sign-off and written justification required for compliance.")
+        } else if (data.decision === "Flag") {
+          nudges.push("D/E exceeds 3.0 — policy typically requires Reject or executive approval rather than Flag alone.")
+        } else {
+          nudges.push("System recommendation: Reject. D/E ratio exceeds policy threshold of 3.0.")
+        }
       } else if (ratio > 2) {
-        nudges.push("System recommendation: Flag for review. Elevated leverage warrants additional scrutiny.")
+        if (data.decision === "Approve") {
+          nudges.push("Approving elevated D/E (>2.0) — document the mitigating factors in your notes for audit purposes.")
+        } else {
+          nudges.push("System recommendation: Flag for review. Elevated leverage warrants additional scrutiny.")
+        }
       } else {
-        nudges.push("System recommendation: Approve. Financials within acceptable parameters.")
+        if (data.decision !== "Approve") {
+          nudges.push(`Rejecting or flagging a healthy D/E of ${ratio.toFixed(2)} — document the specific reason in notes.`)
+        } else {
+          nudges.push("System recommendation: Approve. Financials within acceptable parameters.")
+        }
       }
     }
-    if (data.decision && !data.decisionNotes) {
+
+    if (data.decision === "Reject" && !data.decisionNotes) {
+      nudges.push("⚠️ Rejection requires documented reasoning for compliance audit. Notes field is mandatory before submitting.")
+    } else if (data.decision && !data.decisionNotes) {
       nudges.push("Consider adding notes to document your reasoning for audit purposes.")
     }
   }
