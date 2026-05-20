@@ -1,3 +1,5 @@
+import { db } from "@/lib/db"
+
 type InsightButton = {
   label: string
   insight: string
@@ -9,6 +11,44 @@ export async function POST(request: Request) {
   const nudges: string[] = []
   const buttons: InsightButton[] = []
 
+  // Borrower history — shown on all steps whenever email is known
+  if (data.borrowerEmail) {
+    const history = await db.covenantSession.findMany({
+      where: { borrowerEmail: data.borrowerEmail, status: "completed", decision: { not: null } },
+      select: { decision: true, debtToEquityRatio: true, completedAt: true },
+      orderBy: { completedAt: "desc" },
+      take: 50,
+    })
+
+    if (history.length > 0) {
+      const counts: Record<string, number> = { Approve: 0, Flag: 0, Reject: 0 }
+      let deSum = 0, deCount = 0
+      for (const s of history) {
+        if (s.decision && s.decision in counts) counts[s.decision]++
+        if (s.debtToEquityRatio != null) { deSum += s.debtToEquityRatio; deCount++ }
+      }
+      const avgDE = deCount > 0 ? (deSum / deCount).toFixed(2) : "—"
+      const last = history[0]
+      const lastDate = last.completedAt ? new Date(last.completedAt).toLocaleDateString() : "—"
+
+      buttons.push({
+        label: `View borrower history (${history.length} past session${history.length > 1 ? "s" : ""})`,
+        insight: `Historical record for ${data.borrowerEmail}:`,
+        data: {
+          "Total past sessions": String(history.length),
+          "Approve / Flag / Reject": `${counts.Approve} / ${counts.Flag} / ${counts.Reject}`,
+          "Average D/E ratio": avgDE,
+          "Last decision": `${last.decision} on ${lastDate}`,
+        },
+      })
+
+      if (counts.Reject > 0 || counts.Flag > counts.Approve) {
+        nudges.push(`Prior history shows elevated risk — ${counts.Flag} Flag and ${counts.Reject} Reject across ${history.length} sessions.`)
+      }
+    }
+  }
+
+  // Step-specific nudges
   if (step === 1) {
     if (data.scanQuality === "Poor") {
       nudges.push("Low quality scan — consider requesting a cleaner copy before proceeding.")
@@ -47,12 +87,10 @@ export async function POST(request: Request) {
   }
 
   if (step === 3) {
-    const ratio: unknown = data.debtToEquityRatio
+    const ratio = data.debtToEquityRatio
     if (typeof ratio === "number") {
       if (ratio > 3) {
-        nudges.push(
-          `D/E ratio ${ratio.toFixed(2)} exceeds 3.0 — policy threshold for rejection or executive approval.`,
-        )
+        nudges.push(`D/E ratio ${ratio.toFixed(2)} exceeds 3.0 — policy threshold for rejection or executive approval.`)
         buttons.push({
           label: "See historical approval rate for this risk tier",
           insight: "Based on 1,200 completed reviews — D/E > 3.0 tier:",
@@ -88,14 +126,12 @@ export async function POST(request: Request) {
   }
 
   if (step === 4) {
-    const ratio: unknown = data.debtToEquityRatio
+    const ratio = data.debtToEquityRatio
     if (typeof ratio === "number") {
       if (ratio > 3) {
         nudges.push("System recommendation: Reject. D/E ratio exceeds policy threshold of 3.0.")
       } else if (ratio > 2) {
-        nudges.push(
-          "System recommendation: Flag for review. Elevated leverage warrants additional scrutiny.",
-        )
+        nudges.push("System recommendation: Flag for review. Elevated leverage warrants additional scrutiny.")
       } else {
         nudges.push("System recommendation: Approve. Financials within acceptable parameters.")
       }
