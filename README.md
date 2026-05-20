@@ -60,7 +60,7 @@ graph TD
     Browser -->|"debounced 700ms"| API2
     Browser -->|"Next / Submit"| API3
     API1 --> Prisma
-    API2 -->|"stateless nudge logic"| Browser
+    API2 -->|"rule-based nudges + DB lookup"| Browser
     API3 --> Prisma
     Prisma --> DB
     Auth -->|"JWT session cookie"| MW
@@ -70,7 +70,7 @@ graph TD
 
 - `proxy.ts` runs in the edge runtime and only verifies the JWT cookie — it never touches the database. This is required because Prisma + PostgreSQL cannot run at the edge.
 - Session strategy is `"jwt"` (not `"database"`) so the edge middleware can verify sessions from an encrypted cookie without a DB round-trip.
-- The sidecar nudge API is stateless — it evaluates rules in memory and returns nudge strings with no persistence, keeping latency under 20ms.
+- The sidecar nudge API performs a lightweight DB lookup (borrower history by email) on every call, then applies rule-based logic to generate nudges. It writes no data — all DB access is read-only.
 
 ---
 
@@ -170,16 +170,28 @@ Session state is persisted to the database on every step transition via `PATCH /
 
 ## Sidecar Contextual Feed
 
-A real-time guidance panel appears alongside the workflow form. On every field change, the client debounces 700ms then POSTs current form state to `/api/sidecar-nudge`. The API evaluates rule-based conditions and returns plain-text nudge strings.
+A real-time guidance panel appears alongside the workflow form. On every field change, the client debounces 700ms then POSTs current form state to `/api/sidecar-nudge`. The API runs two layers of logic and returns `{ nudges: string[], buttons: InsightButton[] }`.
 
-Example nudges by step:
+**Layer 1 — Borrower history lookup:**
+When `borrowerEmail` is present, the API queries all completed sessions for that email and surfaces an expandable `InsightButton` showing total session count, Approve/Flag/Reject breakdown, average D/E ratio, and last decision. If the borrower has a pattern of prior rejections, an alert nudge is also emitted.
 
-- **Step 1:** "Low quality scan — consider requesting a cleaner copy before proceeding."
-- **Step 2:** "Large debt exposure (>$5M). Verify against current credit limits."
-- **Step 3:** "D/E ratio 3.42 exceeds 3.0 — policy threshold for rejection or executive approval."
-- **Step 4:** "Consider adding notes to document your reasoning for audit purposes."
+**Layer 2 — Combination-condition rules:**
+Nudges are triggered by multi-signal conditions, not single thresholds:
 
-Each sidecar appearance fires a `sidecar_shown` telemetry event, allowing the dashboard to correlate nudge exposure with decision quality over time.
+| Condition | Nudge |
+|---|---|
+| Handwritten Ledger + Poor scan | ⚠️ 65% historical reject rate — document request template button |
+| Poor scan (any doc) | D/E may be inflated 15–30% — request re-scan |
+| Schedule K-1 | Request accompanying Form 1065 |
+| Equity < $100K | ⚠️ 89% of similar cases result in Reject |
+| Debt > $10M | ⚠️ Mandatory credit committee escalation |
+| D/E > 3 + Poor scan | Ratio may be overstated — re-scan before rejecting |
+| D/E > 3 + Handwritten | 10% input error changes the outcome |
+| Approve on D/E > 3 | ⚠️ Senior sign-off required for compliance |
+| Flag on D/E > 3 | Policy requires Reject, not Flag |
+| Reject without notes | ⚠️ Notes mandatory for compliance audit |
+
+`InsightButton` objects expand inline to show benchmark data (e.g. historical approval rates by D/E tier, or a document request template). Each sidecar appearance fires a `sidecar_shown` telemetry event; button expansions fire `insight_button_click`, allowing the dashboard to correlate nudge exposure with decision quality over time.
 
 ---
 
@@ -199,6 +211,7 @@ Browser action → fireEvent() → POST /api/telemetry → db.telemetryEvent.cre
 | `step_exit` | `step`, `timeOnStepMs`, `fieldChangeCount` | Time-on-task, revision frequency |
 | `field_change` | `fieldName`, `oldValue`, `newValue` | Field error patterns, correction loops |
 | `sidecar_shown` | `step` | Nudge exposure rate |
+| `insight_button_click` | `step`, `metadata.buttonLabel` | Which benchmarks users actually consult |
 | `decision_made` | `metadata.decision` | Decision attribution |
 
 Telemetry calls are fire-and-forget (`fetch(...).catch(() => {})`). They never block the user interaction and silently fail if the network is unavailable. This design keeps the workflow latency unaffected by telemetry volume.
