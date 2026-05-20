@@ -116,6 +116,7 @@ model CovenantSession {
   scanQuality       String?   // "Good" | "Poor"
   totalDebt         Float?
   totalEquity       Float?
+  loanAmount        Float?
   debtToEquityRatio Float?
   decision          String?   // "Approve" | "Flag" | "Reject"
   decisionNotes     String?
@@ -150,7 +151,7 @@ Each completed session produces ~9 telemetry events: `step_enter` × 4 + `step_e
 
 | Step | Name | Purpose |
 |---|---|---|
-| 1 | **Ingest** | Classify document type, record borrower info and scan quality |
+| 1 | **Ingest** | Classify document type, record borrower info, loan amount requested, and scan quality |
 | 2 | **Validate** | Enter total debt and equity figures from documents |
 | 3 | **Analyze** | System computes D/E ratio and surfaces risk level |
 | 4 | **Decide** | Underwriter selects Approve / Flag / Reject with notes |
@@ -173,7 +174,12 @@ Session state is persisted to the database on every step transition via `PATCH /
 A real-time guidance panel appears alongside the workflow form. On every field change, the client debounces 700ms then POSTs current form state to `/api/sidecar-nudge`. The API runs two layers of logic and returns `{ nudges: string[], buttons: InsightButton[] }`.
 
 **Layer 1 — Borrower history lookup:**
-When `borrowerEmail` is present, the API queries all completed sessions for that email and surfaces an expandable `InsightButton` showing total session count, Approve/Flag/Reject breakdown, average D/E ratio, and last decision. If the borrower has a pattern of prior rejections, an alert nudge is also emitted.
+When `borrowerEmail` is present, the API queries all completed sessions for that email and surfaces:
+- An expandable `InsightButton` showing total session count, Approve/Flag/Reject breakdown, average D/E ratio, and last decision
+- A **Loan Size Context** panel (rendered inline at the top of the sidecar) showing:
+  - Platform percentile bar — where this loan ranks among all platform submissions
+  - Comparison horizontal bars: this request vs platform average vs borrower's own historical average
+  - Prior loan history mini-bars, colored by decision outcome (green = Approve, amber = Flag, red = Reject)
 
 **Layer 2 — Combination-condition rules:**
 Nudges are triggered by multi-signal conditions, not single thresholds:
@@ -183,6 +189,11 @@ Nudges are triggered by multi-signal conditions, not single thresholds:
 | Handwritten Ledger + Poor scan | ⚠️ 65% historical reject rate — document request template button |
 | Poor scan (any doc) | D/E may be inflated 15–30% — request re-scan |
 | Schedule K-1 | Request accompanying Form 1065 |
+| Loan-to-income > 5× | Exceeds repayment guideline — verify income sources |
+| Loan-to-income > 10× | ⚠️ Repayment capacity highly uncertain |
+| Loan amount > total equity | ⚠️ No collateral coverage — high loss-given-default |
+| Post-loan D/E > 2.0 | Elevated leverage after disbursement |
+| Post-loan D/E > 3.0 | Policy threshold breach after disbursement — rejection or executive approval required |
 | Equity < $100K | ⚠️ 89% of similar cases result in Reject |
 | Debt > $10M | ⚠️ Mandatory credit committee escalation |
 | D/E > 3 + Poor scan | Ratio may be overstated — re-scan before rejecting |
