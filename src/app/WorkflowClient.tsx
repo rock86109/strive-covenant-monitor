@@ -13,6 +13,7 @@ type WorkflowFormData = {
   borrowerName: string
   borrowerEmail: string
   income: string
+  loanAmount: string
   scanQuality: string
   totalDebt: string
   totalEquity: string
@@ -125,6 +126,7 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
         borrowerName: formData.borrowerName || null,
         borrowerEmail: formData.borrowerEmail || null,
         income: formData.income ? parseFloat(formData.income) : null,
+        loanAmount: formData.loanAmount ? parseFloat(formData.loanAmount) : null,
         scanQuality: formData.scanQuality || null,
         currentStep: 2,
       }
@@ -391,6 +393,16 @@ function Step1({
             type="number"
             value={data.income}
             onChange={e => onChange("income", e.target.value)}
+            placeholder="0"
+            min="0"
+            className={inputCls}
+          />
+        </Field>
+        <Field label="Loan Amount Requested ($)">
+          <input
+            type="number"
+            value={data.loanAmount}
+            onChange={e => onChange("loanAmount", e.target.value)}
             placeholder="0"
             min="0"
             className={inputCls}

@@ -112,6 +112,8 @@ async function main() {
     const totalDebt = Math.round(totalEquity * targetRatio * 100) / 100
     const debtToEquityRatio = Math.round((totalDebt / totalEquity) * 100) / 100
     const income = Math.round(rand(50000, 1200000) * 100) / 100
+    // Loan amount: typically 1–8× income, occasionally larger
+    const loanAmount = Math.round(income * rand(1, 8) * 100) / 100
 
     const decision = decisionForRatio(debtToEquityRatio, scanQuality)
     const decisionNotes = notesForDecision(decision)
@@ -127,6 +129,7 @@ async function main() {
         borrowerName,
         borrowerEmail,
         income,
+        loanAmount,
         scanQuality,
         totalDebt,
         totalEquity,

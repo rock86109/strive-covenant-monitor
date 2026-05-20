@@ -15,7 +15,17 @@ export async function POST(request: Request) {
   const isPoorScan = data.scanQuality === "Poor"
   const debt = parseFloat(data.totalDebt)
   const equity = parseFloat(data.totalEquity)
+  const loanAmount = parseFloat(data.loanAmount)
+  const income = parseFloat(data.income)
   const ratio = typeof data.debtToEquityRatio === "number" ? data.debtToEquityRatio : null
+
+  // Post-loan metrics (available once debt + equity + loanAmount are all known)
+  const hasLoan = !isNaN(loanAmount) && loanAmount > 0
+  const hasEquityVal = !isNaN(equity) && equity > 0
+  const hasDebtVal = !isNaN(debt) && debt > 0
+  const postLoanDE = hasLoan && hasDebtVal && hasEquityVal
+    ? Math.round(((debt + loanAmount) / equity) * 100) / 100
+    : null
 
   // ── Borrower history ────────────────────────────────────────────────────────
   if (data.borrowerEmail) {
@@ -89,6 +99,15 @@ export async function POST(request: Request) {
     if (data.documentType === "2022 Schedule K-1") {
       nudges.push("Schedule K-1 reflects partnership income only — request accompanying Form 1065 for full entity-level financials.")
     }
+
+    if (hasLoan && !isNaN(income) && income > 0) {
+      const lti = loanAmount / income
+      if (lti > 10) {
+        nudges.push(`⚠️ Loan-to-income ratio of ${lti.toFixed(1)}× — well above the 5× threshold. Repayment capacity is highly uncertain.`)
+      } else if (lti > 5) {
+        nudges.push(`Loan-to-income ratio of ${lti.toFixed(1)}× exceeds the 5× guideline. Verify income sources before proceeding.`)
+      }
+    }
   }
 
   // ── Step 2: Financial entry ──────────────────────────────────────────────────
@@ -104,6 +123,18 @@ export async function POST(request: Request) {
       nudges.push("⚠️ Debt exceeds $10M — mandatory escalation to credit committee per policy. Do not approve without committee sign-off.")
     } else if (hasDebt && debt > 5_000_000) {
       nudges.push("Large debt exposure (>$5M). Verify against current credit limits before proceeding.")
+    }
+
+    if (hasLoan && hasEquityVal && loanAmount > equity) {
+      nudges.push(`⚠️ Loan amount ($${loanAmount.toLocaleString()}) exceeds total equity ($${equity.toLocaleString()}) — no collateral coverage. High loss-given-default.`)
+    }
+
+    if (postLoanDE !== null) {
+      if (postLoanDE > 3) {
+        nudges.push(`Post-loan D/E would reach ${postLoanDE.toFixed(2)} — above the 3.0 policy threshold. Rejection or executive approval required after disbursement.`)
+      } else if (postLoanDE > 2) {
+        nudges.push(`Post-loan D/E would reach ${postLoanDE.toFixed(2)} — elevated. Factor this into your risk assessment.`)
+      }
     }
 
     if (hasDebt && hasEquity) {

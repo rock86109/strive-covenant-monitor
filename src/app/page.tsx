@@ -27,6 +27,7 @@ export default async function Home() {
         borrowerName: covenantSession.borrowerName ?? "",
         borrowerEmail: covenantSession.borrowerEmail ?? "",
         income: covenantSession.income?.toString() ?? "",
+        loanAmount: covenantSession.loanAmount?.toString() ?? "",
         scanQuality: covenantSession.scanQuality ?? "",
         totalDebt: covenantSession.totalDebt?.toString() ?? "",
         totalEquity: covenantSession.totalEquity?.toString() ?? "",

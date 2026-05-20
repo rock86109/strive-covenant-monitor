@@ -60,6 +60,7 @@ model CovenantSession {
   borrowerName      String?
   borrowerEmail     String?
   income            Float?
+  loanAmount        Float?
   scanQuality       String?
   totalDebt         Float?
   totalEquity       Float?
