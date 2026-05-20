@@ -8,6 +8,14 @@ type InsightButton = {
   data: Record<string, string>
 }
 
+type LoanContext = {
+  currentAmount: number
+  percentile: number
+  platformAvg: number
+  borrowerAvg: number | null
+  borrowerPriorLoans: Array<{ amount: number; decision: string }>
+}
+
 type WorkflowFormData = {
   documentType: string
   borrowerName: string
@@ -51,6 +59,7 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
   const [nudges, setNudges] = useState<string[]>([])
   const [buttons, setButtons] = useState<InsightButton[]>([])
   const [expandedButton, setExpandedButton] = useState<number | null>(null)
+  const [loanContext, setLoanContext] = useState<LoanContext | null>(null)
   const [saving, setSaving] = useState(false)
   const [completed, setCompleted] = useState(false)
 
@@ -83,6 +92,7 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
       setNudges(incoming)
       setButtons(incomingButtons)
       setExpandedButton(null)
+      setLoanContext(json.loanContext ?? null)
       if (incoming.length > 0 || incomingButtons.length > 0) {
         fireEvent({ eventType: "sidecar_shown", step: currentStep })
       }
@@ -282,6 +292,7 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
               Contextual Guidance
             </h3>
+            {loanContext && <LoanContextPanel ctx={loanContext} />}
             {nudges.length === 0 && buttons.length === 0 ? (
               <p className="text-sm text-gray-300 italic">No alerts for current inputs.</p>
             ) : (
@@ -327,6 +338,91 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
           </div>
         </aside>
       </div>
+    </div>
+  )
+}
+
+// ─── Loan Context Panel ───────────────────────────────────────────────────────
+
+function fmt(n: number): string {
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `$${Math.round(n / 1_000)}K`
+  return `$${Math.round(n)}`
+}
+
+const DECISION_COLOR: Record<string, string> = {
+  Approve: "#22c55e",
+  Flag: "#f59e0b",
+  Reject: "#ef4444",
+}
+
+function LoanContextPanel({ ctx }: { ctx: LoanContext }) {
+  const rows = [
+    { label: "This request", amount: ctx.currentAmount, color: "#3b82f6" },
+    { label: "Platform avg", amount: ctx.platformAvg, color: "#94a3b8" },
+    ...(ctx.borrowerAvg !== null
+      ? [{ label: "Your avg", amount: ctx.borrowerAvg, color: "#8b5cf6" }]
+      : []),
+  ]
+  const maxAmount = Math.max(...rows.map(r => r.amount), ...ctx.borrowerPriorLoans.map(l => l.amount))
+
+  return (
+    <div className="mb-5 space-y-3">
+      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Loan Size Context</p>
+
+      {/* Percentile bar */}
+      <div className="bg-gray-50 rounded-lg p-3 space-y-1.5">
+        <div className="flex justify-between text-xs">
+          <span className="text-gray-500">Platform percentile</span>
+          <span className="font-bold text-blue-600">Top {100 - ctx.percentile}%</span>
+        </div>
+        <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${ctx.percentile}%` }} />
+        </div>
+        <p className="text-xs text-gray-400">Platform avg: {fmt(ctx.platformAvg)}</p>
+      </div>
+
+      {/* Comparison bars */}
+      <div className="space-y-2">
+        {rows.map(row => (
+          <div key={row.label} className="flex items-center gap-2">
+            <span className="text-xs text-gray-400 w-[72px] flex-shrink-0">{row.label}</span>
+            <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-300"
+                style={{ width: `${Math.min(100, (row.amount / maxAmount) * 100)}%`, background: row.color }}
+              />
+            </div>
+            <span className="text-xs font-medium text-gray-600 w-10 text-right flex-shrink-0">
+              {fmt(row.amount)}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Borrower prior loans */}
+      {ctx.borrowerPriorLoans.length > 0 && (
+        <div>
+          <p className="text-xs text-gray-400 mb-1.5">Prior requests</p>
+          <div className="space-y-1.5">
+            {ctx.borrowerPriorLoans.map((loan, i) => {
+              const color = DECISION_COLOR[loan.decision] ?? "#94a3b8"
+              return (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${Math.min(100, (loan.amount / maxAmount) * 100)}%`, background: color }}
+                    />
+                  </div>
+                  <span className="text-xs text-gray-500 w-10 text-right flex-shrink-0">{fmt(loan.amount)}</span>
+                  <span className="text-xs w-10 flex-shrink-0 font-medium" style={{ color }}>{loan.decision}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

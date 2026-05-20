@@ -6,10 +6,19 @@ type InsightButton = {
   data: Record<string, string>
 }
 
+type LoanContext = {
+  currentAmount: number
+  percentile: number
+  platformAvg: number
+  borrowerAvg: number | null
+  borrowerPriorLoans: Array<{ amount: number; decision: string }>
+}
+
 export async function POST(request: Request) {
   const { step, data } = await request.json()
   const nudges: string[] = []
   const buttons: InsightButton[] = []
+  let loanContext: LoanContext | null = null
 
   const isHandwritten = data.documentType === "Handwritten Ledger"
   const isPoorScan = data.scanQuality === "Poor"
@@ -31,7 +40,7 @@ export async function POST(request: Request) {
   if (data.borrowerEmail) {
     const history = await db.covenantSession.findMany({
       where: { borrowerEmail: data.borrowerEmail, status: "completed", decision: { not: null } },
-      select: { decision: true, debtToEquityRatio: true, completedAt: true },
+      select: { decision: true, debtToEquityRatio: true, completedAt: true, loanAmount: true },
       orderBy: { completedAt: "desc" },
       take: 50,
     })
@@ -61,6 +70,42 @@ export async function POST(request: Request) {
       if (counts.Reject >= 2 || (counts.Flag + counts.Reject > counts.Approve && history.length >= 3)) {
         nudges.push(`⚠️ Repeat borrower with poor track record — ${counts.Reject} prior rejections and ${counts.Flag} flags across ${history.length} sessions.`)
       }
+
+      // Borrower avg loan for loanContext
+      if (hasLoan) {
+        const priorLoans = history
+          .filter(s => s.loanAmount != null && s.decision != null)
+          .map(s => ({ amount: s.loanAmount!, decision: s.decision! }))
+        const borrowerLoanSum = priorLoans.reduce((s, l) => s + l.amount, 0)
+        const borrowerAvg = priorLoans.length > 0 ? borrowerLoanSum / priorLoans.length : null
+        // Store for loanContext below (resolved after platform query)
+        ;(data as Record<string, unknown>).__borrowerAvg = borrowerAvg
+        ;(data as Record<string, unknown>).__borrowerPriorLoans = priorLoans.slice(0, 5)
+      }
+    }
+  }
+
+  // ── Loan size context (when loanAmount is present) ───────────────────────────
+  if (hasLoan) {
+    const [belowCount, platformStats] = await Promise.all([
+      db.covenantSession.count({
+        where: { status: "completed", loanAmount: { lte: loanAmount, not: null } },
+      }),
+      db.covenantSession.aggregate({
+        where: { status: "completed", loanAmount: { not: null } },
+        _avg: { loanAmount: true },
+        _count: { loanAmount: true },
+      }),
+    ])
+    const total = platformStats._count.loanAmount
+    const platformAvg = platformStats._avg.loanAmount ?? 0
+    const percentile = total > 0 ? Math.round((belowCount / total) * 100) : 50
+    loanContext = {
+      currentAmount: loanAmount,
+      percentile,
+      platformAvg,
+      borrowerAvg: (data as Record<string, unknown>).__borrowerAvg as number | null ?? null,
+      borrowerPriorLoans: (data as Record<string, unknown>).__borrowerPriorLoans as LoanContext["borrowerPriorLoans"] ?? [],
     }
   }
 
@@ -238,5 +283,5 @@ export async function POST(request: Request) {
     }
   }
 
-  return Response.json({ nudges, buttons })
+  return Response.json({ nudges, buttons, loanContext })
 }
