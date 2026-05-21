@@ -24,6 +24,8 @@ Access is restricted to verified users via **magic-link email authentication** �
 **Why JWT sessions over database sessions:**
 The Edge Runtime cannot run Prisma + PostgreSQL. Using `strategy: "jwt"` keeps the auth path at ~0ms database latency. The tradeoff is that individual sessions cannot be revoked before expiry — acceptable for this use case.
 
+**Magic link `from` address:** `noreply@dannyjiang.net` (Resend custom domain — `dannyjiang.net` verified in Resend/Cloudflare).
+
 **Admin access:**
 `/admin` uses the same JWT gate. In production, restrict admin access by checking `session.user.email` against a role stored in the database or an environment-variable allowlist.
 
@@ -113,16 +115,17 @@ model CovenantSession {
   borrowerName      String?
   borrowerEmail     String?
   income            Float?
+  loanAmount        Float?    // loan amount requested by borrower
   scanQuality       String?   // "Good" | "Poor"
   totalDebt         Float?
   totalEquity       Float?
-  loanAmount        Float?
   debtToEquityRatio Float?
   decision          String?   // "Approve" | "Flag" | "Reject"
   decisionNotes     String?
   currentStep       Int       @default(1)
   status            String    @default("in_progress")
   createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
   completedAt       DateTime?
   telemetryEvents   TelemetryEvent[]
 }
@@ -171,7 +174,7 @@ Session state is persisted to the database on every step transition via `PATCH /
 
 ## Sidecar Contextual Feed
 
-A real-time guidance panel appears alongside the workflow form. On every field change, the client debounces 700ms then POSTs current form state to `/api/sidecar-nudge`. The API runs two layers of logic and returns `{ nudges: string[], buttons: InsightButton[] }`.
+A real-time guidance panel appears alongside the workflow form. On every field change, the client debounces 700ms then POSTs current form state to `/api/sidecar-nudge`. The API runs two layers of logic and returns `{ nudges: string[], buttons: InsightButton[], loanContext: LoanContext | null }`.
 
 **Layer 1 — Borrower history lookup:**
 When `borrowerEmail` is present, the API queries all completed sessions for that email and surfaces:
@@ -252,15 +255,21 @@ Telemetry is intentionally non-blocking (`fetch(...).catch(() => {})`). A slow d
 
 Available at `/admin`. Aggregates all completed sessions into executive-level views.
 
-**KPIs:** Total reviews · Approval / Flag / Reject rates · Portfolio avg D/E ratio · Avg end-to-end review time
+**KPI rows:**
+- Row 1 — Review throughput: Total reviews · Approval / Flag / Reject rates · Portfolio avg D/E · Avg review time
+- Row 2 — Loan volume: Avg Loan Requested · Total Approved Volume (sum of all approved loan amounts)
 
-**Charts:**
-- **Decision Outcomes by D/E Ratio** — Stacked bar showing how decisions correlate with leverage buckets (7 buckets from `<0.5` to `>3`)
-- **Weekly Review Volume** — Area chart of sessions completed per week over the last 26 weeks
-- **Avg Time per Workflow Step** — Horizontal bar from `step_exit` telemetry, revealing where underwriters spend the most time
-- **Portfolio Risk Profile** — Per-bucket breakdown of decision outcomes as proportional bars
+**Charts and sections:**
+- **Strategic Insight Banner** — Highlights the scan quality finding (+X% Flag/Reject uplift for poor scans) as a COO-level action item
+- **Scan Quality Impact** — Stacked bar + proportional bars comparing Good vs Poor scan decision outcomes
+- **Document Type Breakdown** — Stacked bar + risk bars showing Flag/Reject rate per document type (Tax Return, Financial Statement, Bank Statement, Handwritten Ledger)
+- **Decision Outcomes by D/E Ratio** — Stacked bar across 7 leverage buckets (`<0.5` to `>3`)
+- **Weekly Review Volume** — Area chart over the last 26 weeks
+- **Avg Time per Workflow Step** — Horizontal bar from `step_exit` telemetry
+- **Portfolio Risk Profile** — Per-bucket decision proportions
+- **Recent Reviews Table** — Last 20 sessions with Borrower · Document Type · Loan Requested · D/E Ratio · Decision · Completed date
 
-Data is fetched server-side in parallel using `Promise.all` across 6 Prisma queries, then processed and passed to client-side Recharts components.
+Data is fetched server-side in parallel using `Promise.all` across 7 Prisma queries, then processed and passed to client-side Recharts components.
 
 ---
 
