@@ -89,15 +89,15 @@ export async function POST(request: Request) {
   if (hasLoan) {
     const [belowCount, platformStats] = await Promise.all([
       db.covenantSession.count({
-        where: { status: "completed", loanAmount: { lte: loanAmount, not: null } },
+        where: { status: "completed", loanAmount: { lte: loanAmount, gt: 0 } },
       }),
       db.covenantSession.aggregate({
-        where: { status: "completed", loanAmount: { not: null } },
+        where: { status: "completed", loanAmount: { gt: 0 } },
         _avg: { loanAmount: true },
-        _count: { loanAmount: true },
+        _count: true,
       }),
     ])
-    const total = platformStats._count.loanAmount
+    const total = typeof platformStats._count === "number" ? platformStats._count : 0
     const platformAvg = platformStats._avg.loanAmount ?? 0
     const percentile = total > 0 ? Math.round((belowCount / total) * 100) : 50
     loanContext = {

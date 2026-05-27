@@ -115,7 +115,7 @@ model CovenantSession {
   borrowerName      String?
   borrowerEmail     String?
   income            Float?
-  loanAmount        Float?    // loan amount requested by borrower
+  loanAmount        Float     @default(0)  // loan amount requested by borrower
   scanQuality       String?   // "Good" | "Poor"
   totalDebt         Float?
   totalEquity       Float?
