@@ -136,7 +136,7 @@ export default function WorkflowClient({ sessionId, initialData, initialStep }: 
         borrowerName: formData.borrowerName || null,
         borrowerEmail: formData.borrowerEmail || null,
         income: formData.income ? parseFloat(formData.income) : null,
-        loanAmount: formData.loanAmount ? parseFloat(formData.loanAmount) : null,
+        loanAmount: formData.loanAmount ? parseFloat(formData.loanAmount) : 0,
         scanQuality: formData.scanQuality || null,
         currentStep: 2,
       }
